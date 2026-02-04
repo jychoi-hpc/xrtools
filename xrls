@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+
+import xarray as xr
+import argparse
+import os
+import pprint
+
+xr.set_options(display_max_rows=9999)  # show all rows
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file", help="NetCDF/Zarr file to inspect")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="NetCDF/Zarr file to inspect"
+    )
+    parser.add_argument("--dump", nargs="+", default=list(), help="List of variables")
+    parser.add_argument("-g", "--group", help="group name")
+
+    args = parser.parse_args()
+
+    basename = os.path.basename(args.file)
+    _, ext = os.path.splitext(basename)
+    if ext == ".nc":
+        ds = xr.open_dataset(args.file, group=args.group)
+    elif ext == ".grib2":
+        ds = xr.open_dataset(
+            args.file, engine="cfgrib", backend_kwargs={"indexpath": ""}
+        )
+    else:
+        ds = xr.open_zarr(args.file)
+
+    print(ds)
+
+    if len(args.dump) > 0:
+        print("")
+        print("=" * 20)
+        for var in args.dump:
+            print(f"{var}:", ds[var].data)
+
+    if args.verbose:
+        for var in ds.data_vars:
+            # pprint.pprint((var, ds[var].encoding))
+            print((var, ds[var].encoding))

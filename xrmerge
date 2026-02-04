@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# xrmerge --include=Phi --outfile=test.nc --parallel --concat=exp ../stellfoundry-gx-ai/exp-n125-output/group0.1/*/gx-output.nc
+
+import xarray as xr
+import os
+from dask.diagnostics import ProgressBar
+import argparse
+import pandas as pd
+import re
+import pprint
+import ast
+from tqdm import tqdm
+import sys
+
+
+## uniform split
+def nsplit(a, n):
+    k, m = divmod(len(a), n)
+    return (a[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n))
+
+
+def natural_key(text):
+    # Split into list of strings and integers
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", text)]
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("filenames", nargs="+", help="list of files")
+    parser.add_argument("--outfile", help="outfile", default="merged.zarr")
+    parser.add_argument(
+        "--chunk", help="chunk string (e.g., \"{'time':1}\"", default="{'time':1}"
+    )
+    parser.add_argument("--join", help="join outer, inner, etc.", default="outer")
+    parser.add_argument("--mode", help="mode", default="w")
+    parser.add_argument("--dryrun", action="store_true", help="dry run")
+    parser.add_argument(
+        "--include", help="list variables to include (e.g., var1,var2)", default=""
+    )
+    parser.add_argument(
+        "--exclude", help="list variables to exclude (e.g., var1,var2)", default=""
+    )
+    parser.add_argument("--concat", help="concat dim", default=None)
+    parser.add_argument(
+        "--parallel", action="store_true", help="enable parallel writing"
+    )
+    parser.add_argument("--append", action="store_true", help="enable append mode")
+    args = parser.parse_args()
+    include_list = args.include.split(",") if args.include else None
+    exclude_list = args.exclude.split(",") if args.exclude else None
+
+    # isfirst = True
+    # ds_list = list()
+    # const_var_list = set()
+
+    file_list = sorted(args.filenames, key=natural_key)
+    # for fname in file_list:
+    #     print("Read:", fname)
+    #     root, ext = os.path.splitext(fname)
+    #     if ext == ".zarr":
+    #         ds = xr.open_zarr(fname)
+    #     else:
+    #         ds = xr.open_dataset(fname)
+    #     ds = ds.drop_vars(exclude_list, errors="ignore")
+    #     ds_list.append(ds)
+
+    if args.concat is not None:
+        # dx = xr.concat(ds_list, dim=args.concat)
+        ## So much memory efficient!
+        dx = xr.open_mfdataset(
+            file_list,
+            combine="nested",
+            concat_dim=args.concat,
+            # parallel=True,
+            # chunks={"exp": 1},
+        )
+    else:
+        # dx = xr.combine_by_coords(
+        #     ds_list,
+        #     join=args.join,
+        #     combine_attrs="override",
+        #     compat="override",
+        #     data_vars="minimal",
+        #     coords="minimal",
+        # )
+        dx = xr.open_mfdataset(
+            file_list,
+            combine="nested",
+            concat_dim=args.concat,
+            data_vars=include_list,
+            drop_variables=exclude_list,
+            # parallel=True,
+            # chunks={"exp": 1},
+        )
+
+    if include_list is not None:
+        dx = dx[include_list]
+
+    if exclude_list is not None:
+        dx = dx.drop_vars(exclude_list)
+
+    if args.parallel:
+        from mpi4py import MPI
+        from netCDF4 import Dataset
+
+        comm = MPI.COMM_WORLD
+        comm_rank = comm.Get_rank()
+        comm_size = comm.Get_size()
+
+        outfile = args.outfile
+
+        if comm_rank == 0:
+            print(dx)
+            print("output_path:", outfile)
+
+        if not args.dryrun:
+            mode = "w" if not args.append else "a"
+            ds = Dataset(
+                outfile,
+                mode,
+                parallel=True,
+                comm=comm,
+                info=MPI.Info(),
+            )
+
+            for dim in dx.dims:
+                if dim not in ds.dimensions:
+                    ds.createDimension(dim, dx.dims[dim])
+
+            for varname in dx.data_vars:
+                var = dx[varname]
+                dtype = var.dtype
+                netcdf_var = ds.createVariable(
+                    varname,
+                    dtype,
+                    dimensions=var.dims,
+                )
+
+                # Write data in parallel
+                data = var.data
+
+                local_range = list(nsplit(range(len(data)), comm_size))[comm_rank]
+                for i in tqdm(local_range, disable=(comm_rank != 0), desc=f"{varname}"):
+                    netcdf_var[i : i + 1, :] = data[i, :]
+
+            ds.close()
+
+        print("Done.")
+        sys.exit(0)
+
+    chunk = dict(dx.sizes)
+    if args.chunk is not None:
+        user_chunk = ast.literal_eval(args.chunk)
+        for k in user_chunk:
+            chunk[k] = user_chunk[k]
+    dx = dx.chunk(chunk)
+    print(dx)
+
+    outfile = args.outfile
+    print("output_path:", outfile)
+    print("mode:", args.mode)
+
+    with ProgressBar():
+        # for var in dx:
+        #     if "chunks" in dx[var].encoding:
+        #         del dx[var].encoding["chunks"]
+        encoding = {var: {"compressor": None} for var in dx.data_vars}
+        if not args.dryrun:
+            _, ext = os.path.splitext(outfile)
+            if ext == ".zarr":
+                dx.to_zarr(outfile, encoding=encoding, mode=args.mode)
+            else:
+                dx.to_netcdf(outfile, mode=args.mode)
+
+    print("Done.")
