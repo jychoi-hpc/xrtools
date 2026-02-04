@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# xrmerge --include=Phi --outfile=test.nc --parallel --concat=exp ../stellfoundry-gx-ai/exp-n125-output/group0.1/*/gx-output.nc
 
 import xarray as xr
 import os
