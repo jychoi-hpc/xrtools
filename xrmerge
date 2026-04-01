@@ -10,6 +10,7 @@ import pprint
 import ast
 from tqdm import tqdm
 import sys
+from contextlib import nullcontext
 
 
 ## uniform split
@@ -22,6 +23,8 @@ def natural_key(text):
     # Split into list of strings and integers
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", text)]
 
+
+# os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE' ## to avoid "NetCDF: HDF error"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -84,10 +87,9 @@ if __name__ == "__main__":
         # )
         dx = xr.open_mfdataset(
             file_list,
-            combine="nested",
-            concat_dim=args.concat,
-            data_vars=include_list,
-            drop_variables=exclude_list,
+            combine_attrs="override",
+            # data_vars=include_list,
+            # drop_variables=exclude_list,
             # parallel=True,
             # chunks={"exp": 1},
         )
@@ -97,6 +99,20 @@ if __name__ == "__main__":
 
     if exclude_list is not None:
         dx = dx.drop_vars(exclude_list)
+
+    if "time" in dx.dims:
+        # Ensure time is a pandas datetime index
+        time_index = pd.DatetimeIndex(dx.time.values)
+
+        # Generate the full expected range of dates
+        full_time_range = pd.date_range(
+            start=time_index.min(), end=time_index.max(), freq="D"
+        )
+
+        # Find missing dates
+        missing_days = full_time_range.difference(time_index)
+        print("Time range:", time_index.min(), time_index.max())
+        print("Missing days:", missing_days)
 
     if args.parallel:
         from mpi4py import MPI
@@ -120,13 +136,14 @@ if __name__ == "__main__":
                 parallel=True,
                 comm=comm,
                 info=MPI.Info(),
+                format="NETCDF4",
             )
 
             for dim in dx.dims:
                 if dim not in ds.dimensions:
                     ds.createDimension(dim, dx.dims[dim])
 
-            for varname in dx.data_vars:
+            for i, varname in enumerate(dx.data_vars):
                 var = dx[varname]
                 dtype = var.dtype
                 netcdf_var = ds.createVariable(
@@ -140,8 +157,10 @@ if __name__ == "__main__":
 
                 local_range = list(nsplit(range(len(data)), comm_size))[comm_rank]
                 for i in tqdm(local_range, disable=(comm_rank != 0), desc=f"{varname}"):
-                    netcdf_var[i : i + 1, :] = data[i, :]
+                    netcdf_var[i : i + 1, :] = data[i, :].compute()
 
+            ## When getting "NETCDF: HDF error", try to set before running:
+            # os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
             ds.close()
 
         print("Done.")
