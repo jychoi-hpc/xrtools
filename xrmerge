@@ -8,6 +8,8 @@ import pandas as pd
 import re
 import pprint
 import ast
+import math
+import itertools
 from tqdm import tqdm
 import sys
 from contextlib import nullcontext
@@ -24,6 +26,16 @@ def natural_key(text):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", text)]
 
 
+def build_block_slices(shape, block_sizes):
+    """Yield n-dimensional slices for block-wise data writes."""
+    starts_per_dim = [range(0, size, block) for size, block in zip(shape, block_sizes)]
+    for starts in itertools.product(*starts_per_dim):
+        yield tuple(
+            slice(start, min(start + block, size))
+            for start, size, block in zip(starts, shape, block_sizes)
+        )
+
+
 # os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE' ## to avoid "NetCDF: HDF error"
 
 if __name__ == "__main__":
@@ -31,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument("filenames", nargs="+", help="list of files")
     parser.add_argument("--outfile", help="outfile", default="merged.zarr")
     parser.add_argument(
-        "--chunk", help="chunk string (e.g., \"{'time':1}\"", default="{'time':1}"
+        "--chunk", help="chunk string (e.g., \"{'time':1}\"", default="{}"
     )
     parser.add_argument("--join", help="join outer, inner, etc.", default="outer")
     parser.add_argument("--mode", help="mode", default="w")
@@ -50,6 +62,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     include_list = args.include.split(",") if args.include else None
     exclude_list = args.exclude.split(",") if args.exclude else None
+
+    try:
+        chunk = ast.literal_eval(args.chunk)
+    except (ValueError, SyntaxError) as exc:
+        parser.error(f"invalid --chunk value: {exc}")
+
+    if not isinstance(chunk, dict):
+        parser.error("--chunk must be a dict, e.g., \"{'time':1,'lat':64}\"")
 
     # isfirst = True
     # ds_list = list()
@@ -127,12 +147,12 @@ if __name__ == "__main__":
         if comm_rank == 0:
             print(dx)
             print("output_path:", outfile)
+            print("mode:", args.mode)
 
         if not args.dryrun:
-            mode = "w" if not args.append else "a"
             ds = Dataset(
                 outfile,
-                mode,
+                args.mode,
                 parallel=True,
                 comm=comm,
                 info=MPI.Info(),
@@ -146,21 +166,74 @@ if __name__ == "__main__":
             for i, varname in enumerate(dx.data_vars):
                 var = dx[varname]
                 dtype = var.dtype
+
+                block_sizes = tuple(
+                    max(1, int(chunk.get(dim, var.sizes[dim]))) for dim in var.dims
+                )
+                if comm_rank == 0:
+                    print(
+                        f"Variable '{varname}' shape: {var.shape}, block sizes: {block_sizes} ({math.prod(block_sizes) * var.dtype.itemsize / 1024**2 :.2f} MB)"
+                    )
+
+                create_kwargs = {}
+                if var.ndim > 0:
+                    create_kwargs["chunksizes"] = block_sizes
+
                 netcdf_var = ds.createVariable(
                     varname,
                     dtype,
                     dimensions=var.dims,
+                    **create_kwargs,
                 )
+
+                # For parallel HDF5, collective mode is often safer for big chunked writes
+                netcdf_var.set_collective(True)
 
                 # Write data in parallel
                 data = var.data
 
-                local_range = list(nsplit(range(len(data)), comm_size))[comm_rank]
-                for i in tqdm(local_range, disable=(comm_rank != 0), desc=f"{varname}"):
-                    netcdf_var[i : i + 1, :] = data[i, :].compute()
+                if var.ndim == 0:
+                    if comm_rank == 0:
+                        netcdf_var[...] = data.compute()
+                    continue
 
-            ## When getting "NETCDF: HDF error", try to set before running:
-            # os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+                total_blocks = math.prod(
+                    math.ceil(size / block)
+                    for size, block in zip(var.shape, block_sizes)
+                )
+                blocks = list(build_block_slices(var.shape, block_sizes))
+                assert (
+                    len(blocks) % comm_size == 0
+                ), f"Total number of blocks must be divisible by total number of processes: {total_blocks} blocks, {comm_size} processes"
+
+                local_blocks = 0
+                for block_idx, slc in enumerate(blocks):
+                    if block_idx % comm_size != comm_rank:
+                        continue
+                    local_blocks += 1
+
+                pbar = tqdm(
+                    total=local_blocks,
+                    disable=(comm_rank != 0),
+                    desc=f"{varname}",
+                )
+
+                for block_idx, slc in enumerate(blocks):
+                    if block_idx % comm_size != comm_rank:
+                        continue
+                    print(
+                        f"Rank {comm_rank} writing block {block_idx}/{total_blocks} for variable '{varname}': slices {slc}"
+                    )
+
+                    x = data[slc].compute()
+                    netcdf_var[slc] = x
+
+                    if comm_rank == 0:
+                        pbar.update(1)
+
+                if comm_rank == 0:
+                    pbar.close()
+
             ds.close()
 
         print("Done.")
