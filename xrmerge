@@ -221,9 +221,9 @@ if __name__ == "__main__":
                 for block_idx, slc in enumerate(blocks):
                     if block_idx % comm_size != comm_rank:
                         continue
-                    print(
-                        f"Rank {comm_rank} writing block {block_idx}/{total_blocks} for variable '{varname}': slices {slc}"
-                    )
+                    # print(
+                    #     f"Rank {comm_rank} writing block {block_idx}/{total_blocks} for variable '{varname}': slices {slc}"
+                    # )
 
                     x = data[slc].compute()
                     netcdf_var[slc] = x
