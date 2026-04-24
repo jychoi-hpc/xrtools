@@ -59,6 +59,7 @@ if __name__ == "__main__":
         "--parallel", action="store_true", help="enable parallel writing"
     )
     parser.add_argument("--append", action="store_true", help="enable append mode")
+    parser.add_argument("--nan", action="store_true", help="check NaN count per variable")
     args = parser.parse_args()
     include_list = args.include.split(",") if args.include else None
     exclude_list = args.exclude.split(",") if args.exclude else None
@@ -119,6 +120,17 @@ if __name__ == "__main__":
 
     if exclude_list is not None:
         dx = dx.drop_vars(exclude_list)
+
+    if args.nan:
+        import numpy as np
+        print("Checking NaN counts per variable...")
+        for varname in dx.data_vars:
+            var = dx[varname]
+            if not np.issubdtype(var.dtype, np.floating):
+                print(f"  {varname}: skipped (dtype={var.dtype})")
+                continue
+            has_nan = bool(var.isnull().any().compute())
+            print(f"  {varname}: {'HAS NaN' if has_nan else 'no NaN'}")
 
     if "time" in dx.dims:
         # Ensure time is a pandas datetime index
