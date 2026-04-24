@@ -63,11 +63,11 @@ if __name__ == "__main__":
     exclude_list = args.exclude.split(",") if args.exclude else None
 
     try:
-        user_chunk = ast.literal_eval(args.chunk)
+        chunk = ast.literal_eval(args.chunk)
     except (ValueError, SyntaxError) as exc:
         parser.error(f"invalid --chunk value: {exc}")
 
-    if not isinstance(user_chunk, dict):
+    if not isinstance(chunk, dict):
         parser.error("--chunk must be a dict, e.g., \"{'time':1,'lat':64}\"")
 
     # isfirst = True
@@ -180,7 +180,7 @@ if __name__ == "__main__":
                 dtype = var.dtype
 
                 block_sizes = tuple(
-                    max(1, int(user_chunk.get(dim, var.sizes[dim]))) for dim in var.dims
+                    max(1, int(chunk.get(dim, var.sizes[dim]))) for dim in var.dims
                 )
                 if comm_rank == 0:
                     print(
@@ -250,11 +250,11 @@ if __name__ == "__main__":
         print("Done.")
         sys.exit(0)
 
-    chunk = dict(dx.sizes)
+    full_chunk = dict(dx.sizes)
     if args.chunk is not None:
-        for k in user_chunk.keys():
-            chunk[k] = user_chunk[k]
-    dx = dx.chunk(chunk)
+        for k in chunk.keys():
+            full_chunk[k] = chunk[k]
+    dx = dx.chunk(full_chunk)
     print(dx)
 
     outfile = args.outfile
