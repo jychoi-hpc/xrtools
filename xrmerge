@@ -6,13 +6,11 @@ from dask.diagnostics import ProgressBar
 import argparse
 import pandas as pd
 import re
-import pprint
 import ast
 import math
 import itertools
 from tqdm import tqdm
 import sys
-from contextlib import nullcontext
 
 
 ## uniform split
@@ -45,7 +43,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--chunk", help="chunk string (e.g., \"{'time':1}\"", default="{}"
     )
-    parser.add_argument("--join", help="join outer, inner, etc.", default="outer")
     parser.add_argument("--mode", help="mode", default="w")
     parser.add_argument("--dryrun", action="store_true", help="dry run")
     parser.add_argument(
@@ -58,18 +55,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--parallel", action="store_true", help="enable parallel writing"
     )
-    parser.add_argument("--append", action="store_true", help="enable append mode")
-    parser.add_argument("--nan", action="store_true", help="check NaN count per variable")
+    parser.add_argument(
+        "--nan", action="store_true", help="check NaN count per variable"
+    )
     args = parser.parse_args()
     include_list = args.include.split(",") if args.include else None
     exclude_list = args.exclude.split(",") if args.exclude else None
 
     try:
-        chunk = ast.literal_eval(args.chunk)
+        user_chunk = ast.literal_eval(args.chunk)
     except (ValueError, SyntaxError) as exc:
         parser.error(f"invalid --chunk value: {exc}")
 
-    if not isinstance(chunk, dict):
+    if not isinstance(user_chunk, dict):
         parser.error("--chunk must be a dict, e.g., \"{'time':1,'lat':64}\"")
 
     # isfirst = True
@@ -123,6 +121,7 @@ if __name__ == "__main__":
 
     if args.nan:
         import numpy as np
+
         print("Checking NaN counts per variable...")
         for varname in dx.data_vars:
             var = dx[varname]
@@ -181,7 +180,7 @@ if __name__ == "__main__":
                 dtype = var.dtype
 
                 block_sizes = tuple(
-                    max(1, int(chunk.get(dim, var.sizes[dim]))) for dim in var.dims
+                    max(1, int(user_chunk.get(dim, var.sizes[dim]))) for dim in var.dims
                 )
                 if comm_rank == 0:
                     print(
@@ -253,8 +252,7 @@ if __name__ == "__main__":
 
     chunk = dict(dx.sizes)
     if args.chunk is not None:
-        user_chunk = ast.literal_eval(args.chunk)
-        for k in user_chunk:
+        for k in user_chunk.keys():
             chunk[k] = user_chunk[k]
     dx = dx.chunk(chunk)
     print(dx)
