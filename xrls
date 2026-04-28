@@ -11,10 +11,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="NetCDF/Zarr file to inspect")
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="NetCDF/Zarr file to inspect"
+        "-v", "--verbose", action="store_true", help="show variable encodings"
     )
     parser.add_argument("--dump", nargs="+", default=list(), help="List of variables")
     parser.add_argument("-g", "--group", help="group name")
+    parser.add_argument("--nan", action="store_true", help="check NaN count per variable")
 
     args = parser.parse_args()
 
@@ -33,11 +34,27 @@ if __name__ == "__main__":
 
     if len(args.dump) > 0:
         print("")
-        print("=" * 20)
+        print("=" * 10, "Dump variables", "=" * 10)
         for var in args.dump:
-            print(f"{var}:", ds[var].data)
+            print(f"{var}:")
+            pprint.pprint(ds[var].values)
+
+    if args.nan:
+        import numpy as np
+
+        print("")
+        print("=" * 10, "NaN check", "=" * 10)
+
+        for varname in ds.data_vars:
+            var = ds[varname]
+            if not np.issubdtype(var.dtype, np.floating):
+                print(f"  {varname}: skipped (dtype={var.dtype})")
+                continue
+            has_nan = bool(var.isnull().any().values)
+            print(f"  {varname}: {'HAS NaN' if has_nan else 'no NaN'}")
 
     if args.verbose:
+        print("")
+        print("=" * 10, "Variable encodings", "=" * 10)
         for var in ds.data_vars:
-            # pprint.pprint((var, ds[var].encoding))
-            print((var, ds[var].encoding))
+            pprint.pprint((var, ds[var].encoding))
