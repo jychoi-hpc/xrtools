@@ -15,7 +15,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dump", nargs="+", default=list(), help="List of variables")
     parser.add_argument("-g", "--group", help="group name")
-    parser.add_argument("--nan", action="store_true", help="check NaN count per variable")
+    parser.add_argument("--check-nan", action="store_true", help="check NaN count per variable")
 
     args = parser.parse_args()
 
@@ -39,7 +39,7 @@ if __name__ == "__main__":
             print(f"{var}:")
             pprint.pprint(ds[var].values)
 
-    if args.nan:
+    if args.check_nan:
         import numpy as np
 
         print("")

@@ -166,18 +166,29 @@ if __name__ == "__main__":
                 sys.exit(0)
 
     if "time" in dx.dims:
-        # Ensure time is a pandas datetime index
-        time_index = pd.DatetimeIndex(dx.time.values)
+        import numpy as np
 
-        # Generate the full expected range of dates
-        full_time_range = pd.date_range(
-            start=time_index.min(), end=time_index.max(), freq="D"
-        )
+        time_values = dx.time.values
+        print("Time range:", time_values.min(), time_values.max())
 
-        # Find missing dates
-        missing_days = full_time_range.difference(time_index)
-        print("Time range:", time_index.min(), time_index.max())
-        print("Missing days:", missing_days)
+        if len(time_values) < 2:
+            print("Missing: cannot infer step (only one time value)")
+        elif np.issubdtype(time_values.dtype, np.datetime64):
+            time_index = pd.DatetimeIndex(time_values)
+            full_time_range = pd.date_range(
+                start=time_index.min(), end=time_index.max(), freq="D"
+            )
+            missing_days = full_time_range.difference(time_index)
+            print("Missing days:", missing_days)
+        else:
+            steps = np.diff(time_values)
+            if not np.all(steps == steps[0]):
+                print("Missing: cannot infer step (non-uniform time steps)")
+            else:
+                step = steps[0]
+                expected = np.arange(time_values[0], time_values[-1] + step, step)
+                missing = np.setdiff1d(expected, time_values)
+                print("Missing indices:", missing if len(missing) > 0 else "none")
 
     if args.parallel:
         from mpi4py import MPI

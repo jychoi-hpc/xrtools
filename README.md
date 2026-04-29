@@ -60,6 +60,12 @@ Open a group:
 ./xrls path/to/file.nc -g group_name
 ```
 
+Check for NaN values per variable:
+
+```
+./xrls path/to/file.nc --check-nan
+```
+
 ### Merge/concat files
 
 Basic merge to Zarr:
