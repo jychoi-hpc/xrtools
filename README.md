@@ -93,6 +93,33 @@ MPI parallel write (NetCDF only):
 mpirun -n 4 ./xrmerge inputs/*.nc --parallel --outfile merged.nc
 ```
 
+Check for NaN values per variable (prompts to continue; use `-y` to skip prompt):
+
+```
+./xrmerge inputs/*.nc --check-nan --outfile merged.nc
+./xrmerge inputs/*.nc --check-nan -y --outfile merged.nc
+```
+
+Apply a custom preprocess function to each file before merging:
+
+```
+./xrmerge inputs/*.nc --preprocess ./my_preprocess.py --outfile merged.nc
+```
+
+The file must define a function named `preprocess(ds)` that accepts and returns an `xarray.Dataset`:
+
+```python
+# my_preprocess.py
+def preprocess(ds):
+    return ds.isel(time=slice(0, 10))
+```
+
+Overwrite an existing output file:
+
+```
+./xrmerge inputs/*.nc --force --outfile merged.nc
+```
+
 Dry run:
 
 ```
